@@ -1,5 +1,4 @@
-import './App.css';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     bitable,
     dashboard,
@@ -8,7 +7,10 @@ import {
     IData,
     IDataCondition,
     ORDER,
-    Rollup
+    Rollup,
+    workspace,
+    bridge,
+    IDashboard,
 } from "@lark-base-open/js-sdk";
 import { Button, ConfigProvider, DatePicker, Divider, Icon, Input, Select, Spin, Tooltip } from '@douyinfe/semi-ui';
 import dayjs from 'dayjs';
@@ -24,6 +26,7 @@ import 'dayjs/locale/zh-cn';
 import 'dayjs/locale/en';
 import SettingIcon from "./SettingIcon";
 import { IconsMap } from "./iconMap";
+import BaseSelector from './components/BaseSelector';
 
 interface IMileStoneConfig {
     title: string;
@@ -35,6 +38,7 @@ interface IMileStoneConfig {
         tableId: string;
         fieldId: string;
         dateType: 'earliest' | 'latest';
+        baseToken?: string;
     };
     target: number;
     format: string;
@@ -63,72 +67,170 @@ function CheckIcon({ color }: { color: string }) {
     </svg>
 }
 
-export function SelectRefDate({ config, setConfig }: { config: IMileStoneConfig, setConfig: any }) {
+export function SelectRefDate({
+  config,
+  setConfig,
+  isMultipleBase,
+}: {
+  config: IMileStoneConfig;
+  setConfig: any;
+  isMultipleBase: boolean | undefined;
+}) {
+  const [tables, setTables] = React.useState<any[]>([]);
+  const [fields, setFields] = React.useState<any[]>([]);
+  const [tableLoading, setTableLoading] = React.useState<boolean>(false);
+  const [fieldLoading, setFieldLoading] = React.useState<boolean>(false);
+  const { t } = useTranslation()
+  const hasInit = useRef(false);
 
-    const [tables, setTables] = React.useState<any[]>([]);
-    const [fields, setFields] = React.useState<any[]>([]);
-    const { t } = useTranslation()
-
-    async function getTables() {
-        let tables = await bitable.base.getTableMetaList();
-        setTables(tables);
-        if (tables && tables.length > 0) {
-            let targetTableId = tables[0].id
-            let fields: any = []
-            let targetFieldId = ""
-            for (let table_info of tables) {
-                // console.log("表格",table_info)
-                let table = await bitable.base.getTableById(table_info.id);
-                let allFields = await table.getFieldMetaList();
-                let dateFields = allFields.filter(item => item.type === 5 || item.type === 1001 || item.type === 1002)
-                if (dateFields && dateFields.length > 0) {
-                    fields = dateFields
-                    targetTableId = table_info.id
-                    targetFieldId = dateFields[0].id
-                    break
-                }
-            }
-            if (fields.length > 0) {
-                setFields(fields)
-                setConfig({
-                    ...config,
-                    dateInfo: {
-                        tableId: targetTableId,
-                        fieldId: targetFieldId,
-                        dateType: 'earliest'
-                    }
-                })
-            }
-        }
-
-        if (config.dateType === 'ref' && config.dateInfo.tableId) {
-            console.log("you have table id")
-            getDateFields(config.dateInfo.tableId);
-        }
+  async function getTables() {
+    if (isMultipleBase && !config?.dateInfo?.baseToken) {
+      return;
     }
-
-    React.useEffect(() => {
-        getTables();
-    }, [])
-
-    async function getDateFields(table_id: string) {
-        console.log("获取", table_id)
-        let table = await bitable.base.getTableById(table_id);
-        let allFields = await table.getFieldMetaList();
-        let fields = allFields.filter(item => item.type === 5 || item.type === 1001 || item.type === 1002)
-        setFields(fields)
-        setConfig({
+    setTableLoading(true);
+    const realBitable = isMultipleBase
+      ? await workspace.getBitable(config.dateInfo.baseToken!)
+      : bitable;
+    let tables = (await realBitable?.base?.getTableMetaList()) || [];
+    setTables(tables);
+    const needUpdate = !hasInit.current
+      ? !config?.dateInfo?.tableId || !config?.dateInfo?.fieldId
+      : true;
+    if (needUpdate) {
+      if (tables && tables.length > 0) {
+        let targetTableId = tables[0].id
+        let fields: any = []
+        let targetFieldId = ""
+        for (let table_info of tables) {
+          // console.log("表格",table_info)
+          let table = await realBitable?.base?.getTableById(table_info.id);
+          let allFields = (await table?.getFieldMetaList()) || [];
+          let dateFields = allFields.filter((item) => item.type === 5 || item.type === 1001 || item.type === 1002)
+          if (dateFields && dateFields.length > 0) {
+            fields = dateFields
+            targetTableId = table_info.id
+            targetFieldId = dateFields[0].id
+            break
+          }
+        }
+        if (fields.length > 0) {
+          setFields(fields)
+          setConfig({
             ...config,
             dateInfo: {
-                ...config.dateInfo,
-                tableId: table_id
+              ...config.dateInfo,
+              tableId: targetTableId,
+              fieldId: targetFieldId,
+              dateType: 'earliest'
             }
-        })
-        return fields
+          })
+        }
+      }
     }
 
-    return (<div>
-        <div className={'form-item'}>
+    if (config.dateType === 'ref' && config.dateInfo.tableId) {
+            console.log("you have table id")
+            getDateFields(config.dateInfo.tableId);
+    }
+
+    hasInit.current = true;
+    setTableLoading(false);
+  }
+
+  const getBaseToken = async () => {
+    if (config?.dateInfo?.baseToken) {
+      return;
+    }
+    const baseList = await workspace.getBaseList({
+      query: "",
+      page: {
+        cursor: "",
+      },
+    });
+    const initialBaseToken = baseList?.base_list?.[0]?.token || "";
+    setConfig({
+      ...config,
+      dateInfo: {
+        ...config.dateInfo,
+        baseToken: initialBaseToken,
+      },
+    });
+  };
+
+  React.useEffect(() => {
+    (async () => {
+      if (isMultipleBase) {
+        getBaseToken();
+      }
+    })();
+  }, [isMultipleBase]);
+
+  React.useEffect(() => {
+    if (
+      isMultipleBase === undefined ||
+      (isMultipleBase && !config?.dateInfo?.baseToken)
+    ) {
+      return;
+    }
+    if (hasInit.current) {
+      setConfig((prev: IMileStoneConfig) => ({
+        ...prev,
+        dateInfo: {
+          ...prev.dateInfo,
+          tableId: "",
+          fieldId: "",
+          dateType: "earliest",
+        },
+      }));
+    }
+    getTables();
+  }, [config?.dateInfo?.baseToken, isMultipleBase]);
+
+  async function getDateFields(table_id: string) {
+    console.log("获取", table_id);
+    if (isMultipleBase && !config?.dateInfo?.baseToken) {
+      return;
+    }
+    setFieldLoading(true);
+    const realBitable = isMultipleBase
+      ? await workspace.getBitable(config.dateInfo.baseToken!)
+      : bitable;
+    let table = await realBitable?.base?.getTableById(table_id);
+    let allFields = (await table?.getFieldMetaList()) || [];
+    let fields = allFields.filter(
+      (item) => item.type === 5 || item.type === 1001 || item.type === 1002
+    );
+    setFields(fields);
+    setConfig({
+      ...config,
+      dateInfo: {
+        ...config.dateInfo,
+        tableId: table_id,
+      },
+    });
+    setFieldLoading(false);
+    return fields;
+  }
+
+  return (
+    <div>
+      {isMultipleBase && (
+        <div className={"form-item"}>
+          <BaseSelector
+            baseToken={config.dateInfo.baseToken!}
+            onChange={(v) =>
+              setConfig({
+                ...config,
+                dateInfo: {
+                  ...config.dateInfo,
+                  baseToken: v,
+                },
+              })
+            }
+          />
+        </div>
+      )}
+  <div className={'form-item'}>
             <div className={'label'} style={{ marginTop: 8 }}>{t("数据源")}</div>
             <Select
                 onChange={async (v) => {
@@ -136,8 +238,9 @@ export function SelectRefDate({ config, setConfig }: { config: IMileStoneConfig,
                     setConfig({
                         ...config,
                         dateInfo: {
+                            ...config.dateInfo,
                             tableId: v,
-                            fieldId: fields[0] ? fields[0].id : "",
+                            fieldId: fields?.[0] ? fields[0].id : "",
                             dateType: 'earliest'
                         }
                     })
@@ -183,7 +286,9 @@ export function SelectRefDate({ config, setConfig }: { config: IMileStoneConfig,
                         </div>,
                         value: item.id,
                     }
-                })} />
+                })} 
+                renderSelectedItem={tableLoading ? () => <Spin /> : undefined}
+            />
         </div>
         <div className={'form-item'}>
             <div className={'label'}>
@@ -223,6 +328,7 @@ export function SelectRefDate({ config, setConfig }: { config: IMileStoneConfig,
                         value: item.id,
                     }
                 })}
+                renderSelectedItem={tableLoading ? () => <Spin /> : undefined}
             >
 
             </Select>
@@ -269,9 +375,9 @@ export function SelectRefDate({ config, setConfig }: { config: IMileStoneConfig,
 }
 
 export default function App() {
-    const [locale, setLocale] = useState(zhCN);
-    const { t } = useTranslation()
-    const [config, setConfig] = useState<IMileStoneConfig>({
+  const [locale, setLocale] = useState(zhCN);
+  const { t } = useTranslation()
+ const [config, setConfig] = useState<IMileStoneConfig>({
         title: t("项目启动日期"),
         color: colors[0],
         dateType: 'date',
@@ -286,11 +392,35 @@ export default function App() {
         target: Date.now(),
         format: 'YYYY-MM-DD',
     })
-    const [theme, setTheme] = useState('LIGHT')
+  const [theme, setTheme] = useState('LIGHT')
+  const [isMultipleBase, setIsMultipleBase] = useState<boolean | undefined>(
+    undefined
+  );
+  const dashboardRef = useRef<IDashboard>(dashboard);
 
-    const isCreate = dashboard.state === DashboardState.Create
-    /** 是否配置模式下 */
-    const isConfig = dashboard.state === DashboardState.Config || isCreate;
+  useEffect(() => {
+    (async () => {
+      const env = await bridge.getEnv();
+      setIsMultipleBase(env.needChangeBase ?? false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      if (!isMultipleBase) {
+        return;
+      }
+      const workspaceBitable = await workspace.getBitable(
+        config.dateInfo.baseToken!
+      );
+      const workspaceDashboard = workspaceBitable?.dashboard || dashboard;
+      dashboardRef.current = workspaceDashboard;
+    })();
+  }, [config.dateInfo.baseToken, isMultipleBase]);
+
+  const isCreate = dashboardRef.current.state === DashboardState.Create;
+  /** 是否配置模式下 */
+  const isConfig = dashboardRef.current.state === DashboardState.Config || isCreate;
 
     const changeDateType = (type: 'date' | 'ref') => {
         let dateInfo: any = {}
@@ -319,7 +449,7 @@ export default function App() {
         }
     }
 
-    useEffect(() => {
+   useEffect(() => {
         bitable.bridge.getLocale().then((lang) => {
             changeLang(lang as any)
         })
@@ -342,11 +472,11 @@ export default function App() {
             body.style.setProperty('--bg-color', bgColor);
         }
 
-        dashboard.getTheme().then((theme) => {
+        dashboardRef.current.getTheme().then((theme) => {
             // @ts-ignore
             changeTheme({ theme: theme.theme, bgColor: theme.chartBgColor });
         })
-        dashboard.onThemeChange(res => {
+        dashboardRef.current.onThemeChange(res => {
             // console.log("them 变化", res)
             changeTheme({ theme: res.data.theme, bgColor: res.data.chartBgColor });
         });
@@ -361,74 +491,79 @@ export default function App() {
 
     }, [])
 
-    const updateConfig = (res: any) => {
-        const { customConfig } = res;
-        if (customConfig) {
-            setConfig((pre) => {
-                return {
-                    ...pre,
-                    ...customConfig
-                }
-            });
-            setTimeout(() => {
-                // 预留3s给浏览器进行渲染，3s后告知服务端可以进行截图了
-                dashboard.setRendered();
-            }, 3000);
+  const updateConfig = (res: any) => {
+    const { customConfig } = res;
+    if (customConfig) {
+      setConfig((pre) => {
+        return {
+          ...pre,
+          ...customConfig
         }
-
+      });
+      setTimeout(() => {
+        // 预留3s给浏览器进行渲染，3s后告知服务端可以进行截图了
+        dashboardRef.current.setRendered();
+      }, 3000);
     }
+  }
 
-    React.useEffect(() => {
-        if (isCreate) {
-            return
-        }
-        // 初始化获取配置
-        dashboard.getConfig().then(updateConfig);
-    }, []);
-
-
-    React.useEffect(() => {
-        const offConfigChange = dashboard.onConfigChange((r) => {
-            console.log('====onConfigChange', r)
-            // 监听配置变化，协同修改配置
-            updateConfig(r.data);
-        });
-        return () => {
-            offConfigChange();
-        }
-    }, []);
-
-    const onClick = () => {
-        // 保存配置
-        console.log("保存配置", config)
-        let dataConditions: IDataCondition[] | null = []
-        if (config.dateType === 'ref') {
-            dataConditions = [{
-                tableId: config.dateInfo.tableId,
-                groups: [
-                    {
-                        fieldId: config.dateInfo.fieldId,
-                    }
-                ],
-            }]
-        }
-        dashboard.saveConfig({
-            customConfig: config,
-            dataConditions: dataConditions,
-        } as any)
+  React.useEffect(() => {
+    if (isCreate) {
+      return
     }
-    const [update, setUpdate] = useState(0);
-    useEffect(() => {
-        if (dashboard.state === DashboardState.FullScreen || dashboard.state === DashboardState.View) {
-            setInterval(() => {
-                setUpdate(Math.random());
-                dashboard.setRendered();
-            }, 1000 * 30)
-        }
-    }, [])
+    // 初始化获取配置
+    dashboardRef.current.getConfig().then(updateConfig);
+  }, []);
 
-    return (
-        <main className={classnames({
+
+  React.useEffect(() => {
+    const offConfigChange = dashboardRef.current.onConfigChange((r) => {
+      console.log('====onConfigChange', r)
+      // 监听配置变化，协同修改配置
+      updateConfig(r.data);
+    });
+    return () => {
+      offConfigChange();
+    }
+  }, []);
+
+  const onClick = () => {
+    // 保存配置
+    console.log("保存配置", config)
+    let dataConditions: IDataCondition[] | null = []
+    if (config.dateType === 'ref') {
+      dataConditions = [
+        {
+          tableId: config.dateInfo.tableId,
+          groups: [
+            {
+              fieldId: config.dateInfo.fieldId,
+            }
+          ],
+          baseToken: config.dateInfo.baseToken,
+        }
+      ];
+    }
+    dashboardRef.current.saveConfig({
+      customConfig: config,
+      dataConditions: dataConditions,
+    } as any)
+  };
+  const [update, setUpdate] = useState(0);
+  useEffect(() => {
+    if (
+      dashboardRef.current.state === DashboardState.FullScreen ||
+      dashboardRef.current.state === DashboardState.View
+    ) {
+      setInterval(() => {
+        setUpdate(Math.random());
+        dashboardRef.current.setRendered();
+      }, 1000 * 30)
+    }
+  }, [])
+
+  return (
+       <main className={classnames({
             'main-config': isConfig,
             'main': true,
         })}>
@@ -501,7 +636,7 @@ export default function App() {
 
                                         {
                                             config.dateType === 'ref' && (
-                                                <SelectRefDate config={config} setConfig={setConfig} />
+                                                <SelectRefDate config={config} setConfig={setConfig} isMultipleBase={isMultipleBase} />
                                             )
                                         }
                                     </div>
@@ -606,7 +741,7 @@ export default function App() {
 
 function MileStone({ config, isConfig }: {
     config: IMileStoneConfig,
-    isConfig: boolean
+    isConfig: boolean;
 }) {
 
     const { title, format, color, target } = config
@@ -615,11 +750,23 @@ function MileStone({ config, isConfig }: {
     const { t } = useTranslation()
     const [theme, setTheme] = useState('LIGHT')
 
+  const dashboardRef = useRef<IDashboard>(dashboard);
+
+  useEffect(() => {
+    (async () => {
+      const workspaceBitable = await workspace.getBitable(
+        config.dateInfo.baseToken!
+      );
+      const workspaceDashboard = workspaceBitable?.dashboard || dashboard;
+      dashboardRef.current = workspaceDashboard;
+    })();
+  }, [config.dateInfo.baseToken]);
+
     useEffect(() => {
         setDiffDay(Math.ceil((new Date(time).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     }, [time])
 
-    useEffect(() => {
+   useEffect(() => {
 
         function changeTheme({ theme, bgColor }: { theme: string, bgColor: string }) {
             const body = document.querySelector('body');
@@ -640,12 +787,12 @@ function MileStone({ config, isConfig }: {
             body.style.setProperty('--bg-color', bgColor);
         }
 
-        dashboard.getTheme().then((theme) => {
+        dashboardRef.current.getTheme().then((theme) => {
             console.log("them 变化111", theme, theme.theme)
             // @ts-ignore
             changeTheme({ theme: theme.theme, bgColor: theme.chartBgColor });
         })
-        dashboard.onThemeChange(res => {
+        dashboardRef.current.onThemeChange(res => {
             console.log("them 变化", res)
             changeTheme({ theme: res.data.theme, bgColor: res.data.chartBgColor });
         });
@@ -661,8 +808,8 @@ function MileStone({ config, isConfig }: {
         // })
     }, [])
 
-    useEffect(() => {
-        const getMaxMinTimeFromData = (data: IData) => {
+  useEffect(() => {
+   const getMaxMinTimeFromData = (data: IData) => {
             let maxDate = data[1][0].value as number, minDate = data[1][0].value as number;
             let maxTimeFormat = "";
             let minTimeFormat = "";
@@ -685,81 +832,79 @@ function MileStone({ config, isConfig }: {
             }
         }
 
-        async function getTime() {
-            console.log("====getTime", {
-                config: JSON.parse(JSON.stringify(config))
-            })
-            let data: IData = [];
-            let tableId = config.dateInfo.tableId
-            let fieldId = config.dateInfo.fieldId
-            let dateType = config.dateInfo.dateType;
+    async function getTime() {
+      console.log("====getTime", {
+        config: JSON.parse(JSON.stringify(config))
+    })
+      let data: IData = [];
+      let tableId = config.dateInfo.tableId
+      let fieldId = config.dateInfo.fieldId
+      let dateType = config.dateInfo.dateType;
 
-
-            if (isConfig) {
-                data = await dashboard.getPreviewData({
-                    tableId: tableId,
-                    groups: [
-                        {
-                            fieldId: fieldId,
-                        }
-                    ],
-                });
-                console.log("====getTime - 预览数据", data);
-
-            } else {
-                data = await dashboard.getData()
-                console.log('====getTime - 非预览模式getData', data)
+      if (isConfig) {
+        data = await dashboardRef.current.getPreviewData({
+          tableId: tableId,
+          groups: [
+            {
+              fieldId: fieldId,
             }
-            const { maxTimeFormat, minTimeFormat, maxDate, minDate } = getMaxMinTimeFromData(data)
+          ],
+        });
+        console.log("====getTime - 预览数据", data);
+      } else {
+        data = await dashboardRef.current.getData()
+        console.log('====getTime - 非预览模式getData', data)
+      }
+      const { maxTimeFormat, minTimeFormat, maxDate, minDate } = getMaxMinTimeFromData(data)
 
-            let time = ''
+      let time = ''
 
-            if (dateType === 'earliest') {
-                time = minTimeFormat
-            } else {
-                time = maxTimeFormat
-            }
-            console.log("====getTime 重新设置数据的时间", time)
-            setTime(dayjs(time).format(format))
-            await dashboard.setRendered()
-        }
+      if (dateType === 'earliest') {
+        time = minTimeFormat
+      } else {
+        time = maxTimeFormat
+      }
+      console.log("====getTime 重新设置数据的时间", time)
+      setTime(dayjs(time).format(format))
+      await dashboardRef.current.setRendered()
+    }
 
-        function loadTimeInfo(type: string) {
-            console.log("===loadTimeInfo", type)
-            if (config.dateType === "ref") {
-                getTime()
-            } else {
-                setTime(dayjs(config.target).format(config.format))
-            }
-        }
+    function loadTimeInfo(type: string) {
+      console.log("===loadTimeInfo", type)
+      if (config.dateType === "ref") {
+        getTime()
+      } else {
+        setTime(dayjs(config.target).format(config.format))
+      }
+    }
 
-        loadTimeInfo('====useEffect')
+    loadTimeInfo('====useEffect')
+    
+
+    // @ts-ignore;
+    window._loadTimeInfo = loadTimeInfo;
+    // @ts-ignore;
+    window._dashboard = dashboardRef.current;
+    let off = dashboardRef.current.onDataChange((r) => {
+      console.log("====onDataChange触发", r);// TODO 由saveConfig触发的此回调。这个时机触发的n（n可能有几十秒），onDataChange拿到的数据，以及调用getData拿到的数据还是旧的
+      setTimeout(() => {
+        loadTimeInfo('===onDataChange 延迟1s触发');
+      }, 1000);
+      // if (config.dateType === "ref") {
+      //     let info = r.data
+      //     const { maxTimeFormat, minTimeFormat, maxDate, minDate } = getMaxMinTimeFromData(info)
+      //     const time = config.dateInfo.dateType === 'earliest' ? minTimeFormat : maxTimeFormat
+      //     console.log("data change,时间", time)
+      //     setTime(dayjs(time).format(format))
+      // }
+    })
+    return () => {
+      off()
+    }
+  }, [config, isConfig])
 
 
-        // @ts-ignore;
-        window._loadTimeInfo = loadTimeInfo;
-        // @ts-ignore;
-        window._dashboard = dashboard;
-        let off = dashboard.onDataChange((r) => {
-            console.log("====onDataChange触发", r);// TODO 由saveConfig触发的此回调。这个时机触发的n（n可能有几十秒），onDataChange拿到的数据，以及调用getData拿到的数据还是旧的
-            setTimeout(() => {
-                loadTimeInfo('===onDataChange 延迟1s触发');
-            }, 1000);
-            // if (config.dateType === "ref") {
-            //     let info = r.data
-            //     const { maxTimeFormat, minTimeFormat, maxDate, minDate } = getMaxMinTimeFromData(info)
-            //     const time = config.dateInfo.dateType === 'earliest' ? minTimeFormat : maxTimeFormat
-            //     console.log("data change,时间", time)
-            //     setTime(dayjs(time).format(format))
-            // }
-        })
-        return () => {
-            off()
-        }
-    }, [config, isConfig])
-
-
-    return (
+   return (
         <Spin spinning={!time}>
             <div style={{ width: '100%', textAlign: 'center', overflow: 'hidden' }}>
                 <div style={{
@@ -845,4 +990,3 @@ function MileStone({ config, isConfig }: {
     );
 
 }
-
