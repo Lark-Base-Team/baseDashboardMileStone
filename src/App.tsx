@@ -79,9 +79,8 @@ export function SelectRefDate({
   const [tables, setTables] = React.useState<any[]>([]);
   const [fields, setFields] = React.useState<any[]>([]);
   const [tableLoading, setTableLoading] = React.useState<boolean>(false);
-  const [fieldLoading, setFieldLoading] = React.useState<boolean>(false);
   const { t } = useTranslation()
-  const hasInit = useRef(false);
+  const baseHasChanged = useRef(false);
 
   async function getTables() {
     if (isMultipleBase && !config?.dateInfo?.baseToken) {
@@ -93,10 +92,7 @@ export function SelectRefDate({
       : bitable;
     let tables = (await realBitable?.base?.getTableMetaList()) || [];
     setTables(tables);
-    const needUpdate = !hasInit.current
-      ? !config?.dateInfo?.tableId || !config?.dateInfo?.fieldId
-      : true;
-    if (needUpdate) {
+    if (baseHasChanged.current || (!config?.dateInfo?.tableId || !config?.dateInfo?.fieldId)) {
       if (tables && tables.length > 0) {
         let targetTableId = tables[0].id
         let fields: any = []
@@ -133,7 +129,6 @@ export function SelectRefDate({
             getDateFields(config.dateInfo.tableId);
     }
 
-    hasInit.current = true;
     setTableLoading(false);
   }
 
@@ -172,7 +167,7 @@ export function SelectRefDate({
     ) {
       return;
     }
-    if (hasInit.current) {
+    if (baseHasChanged.current) {
       setConfig((prev: IMileStoneConfig) => ({
         ...prev,
         dateInfo: {
@@ -191,7 +186,6 @@ export function SelectRefDate({
     if (isMultipleBase && !config?.dateInfo?.baseToken) {
       return;
     }
-    setFieldLoading(true);
     const realBitable = isMultipleBase
       ? await workspace.getBitable(config.dateInfo.baseToken!)
       : bitable;
@@ -208,7 +202,6 @@ export function SelectRefDate({
         tableId: table_id,
       },
     });
-    setFieldLoading(false);
     return fields;
   }
 
@@ -218,7 +211,7 @@ export function SelectRefDate({
         <div className={"form-item"}>
           <BaseSelector
             baseToken={config.dateInfo.baseToken!}
-            onChange={(v) =>
+            onChange={(v) => {
               setConfig({
                 ...config,
                 dateInfo: {
@@ -226,6 +219,8 @@ export function SelectRefDate({
                   baseToken: v,
                 },
               })
+              baseHasChanged.current = true;
+            }
             }
           />
         </div>
@@ -245,7 +240,7 @@ export function SelectRefDate({
                         }
                     })
                 }}
-                value={config.dateInfo.tableId}
+                value={tables.find(item => item.id === config.dateInfo.tableId) ? config.dateInfo.tableId : ""}
                 style={{
                     width: "100%"
                 }}
@@ -307,7 +302,7 @@ export function SelectRefDate({
                         }
                     })
                 }}
-                value={config.dateInfo.fieldId}
+                value={fields.find(item => item.id === config.dateInfo.fieldId) ? config.dateInfo.fieldId : ""}
                 placeholder={t('请选择日期字段')}
                 optionList={fields.map(item => {
                     return {
@@ -389,7 +384,7 @@ export default function App() {
             fieldId: '',
             dateType: 'earliest'
         },
-        target: Date.now(),
+        target: 0,
         format: 'YYYY-MM-DD',
     })
   const [theme, setTheme] = useState('LIGHT')
@@ -878,11 +873,10 @@ function MileStone({ config, isConfig }: {
     }
 
     function loadTimeInfo(type: string) {
-      console.log("===loadTimeInfo", type)
       if (config.dateType === "ref") {
         getTime()
       } else {
-        setTime(dayjs(config.target).format(config.format))
+        setTime(config.target ? dayjs(config.target).format(config.format) : '')
       }
     }
 
